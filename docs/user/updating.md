@@ -79,6 +79,10 @@ update can roll back to the previous version. If the update still fails:
 at once. Hover it to see which providers it will update. Providers that only
 offer a manual update command are not included.
 
+When provider updates are available, T3 Code also offers them for each
+connected environment, such as a remote server, with an **Update** button per
+environment.
+
 ## Mobile updates
 
 To update an environment from your phone, open **Settings → Environments** and

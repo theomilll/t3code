@@ -2,8 +2,7 @@ import { useNavigate } from "@tanstack/react-router";
 import { DownloadIcon } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-import { useEnvironments } from "~/state/environments";
-import { isDesktopLocalConnectionTarget } from "~/connection/desktopLocal";
+import { useEnvironments, usePrimaryEnvironmentId } from "~/state/environments";
 import { useDismissedProviderUpdateNotificationKeys } from "../providerUpdateDismissal";
 import { ProviderUpdateEnvironmentRows } from "./ProviderUpdateEnvironmentRows";
 import { useLocalEnvironmentUpdateGroups } from "./ProviderUpdateLaunchNotification.environments";
@@ -17,30 +16,28 @@ import { ProviderUpdatePrimaryNotification } from "./ProviderUpdatePrimaryNotifi
 import { stackedThreadToast, toastManager } from "./ui/toast";
 
 /**
- * True when a desktop-local secondary backend (the parallel WSL backend) is
- * present alongside the primary. Local secondaries connect over loopback with a
- * `local:<backendInstanceId>` bearer connection id; everything else (SSH, relay,
- * remote) is ignored. Gating on this keeps non-WSL users on the unchanged
- * single-prompt flow.
+ * True when the catalog holds any environment besides the primary (a WSL
+ * backend or a remote server). Gated on catalog presence rather than connection
+ * state so the flow does not flip, and churn toasts, while a remote connects.
  */
-function useHasLocalSecondaryEnvironment(): boolean {
+function useHasSecondaryEnvironment(): boolean {
   const { environments } = useEnvironments();
+  const primaryEnvironmentId = usePrimaryEnvironmentId();
   return useMemo(
-    () =>
-      environments.some((environment) => isDesktopLocalConnectionTarget(environment.entry.target)),
-    [environments],
+    () => environments.some((environment) => environment.environmentId !== primaryEnvironmentId),
+    [environments, primaryEnvironmentId],
   );
 }
 
 /**
- * The provider update popover. With a WSL backend present it splits the update
- * trigger per environment; without one (the common case) it falls back to the
- * single-prompt flow so non-WSL users see no change.
+ * The provider update popover. With any secondary environment present it
+ * splits the update trigger per environment; otherwise it uses the
+ * single-prompt flow for the primary.
  */
 export function ProviderUpdateLaunchNotification() {
-  const hasLocalSecondary = useHasLocalSecondaryEnvironment();
+  const hasSecondary = useHasSecondaryEnvironment();
 
-  return hasLocalSecondary ? (
+  return hasSecondary ? (
     <ProviderUpdateEnvironmentsNotification />
   ) : (
     <ProviderUpdatePrimaryNotification />
@@ -50,9 +47,9 @@ export function ProviderUpdateLaunchNotification() {
 const seenProviderUpdateNotificationKeys = new Set<string>();
 type ProviderUpdateToastId = ReturnType<typeof toastManager.add>;
 
-// While a local backend (e.g. WSL) is still connecting, defer the popover so it
-// reflects every environment. Cap the wait so a stuck or failed backend can't
-// suppress the primary's updates indefinitely.
+// While an environment is still connecting, defer the popover so it reflects
+// every environment. Cap the wait so a stuck or failed backend can't suppress
+// the primary's updates indefinitely.
 const SETTLING_GRACE_MS = 30_000;
 
 function ProviderUpdateEnvironmentsNotification() {
@@ -71,8 +68,8 @@ function ProviderUpdateEnvironmentsNotification() {
   // is kept so in-progress rows are not torn down.
   const hasInteractedRef = useRef(false);
 
-  // Close our prompt if this flow unmounts (e.g. the WSL backend is disabled
-  // and we fall back to the single-prompt flow).
+  // Close our prompt if this flow unmounts (e.g. the last secondary environment
+  // is removed and we fall back to the single-prompt flow).
   useEffect(() => {
     return () => {
       if (activeToastRef.current !== null) {
@@ -95,7 +92,7 @@ function ProviderUpdateEnvironmentsNotification() {
     [updateGroups],
   );
 
-  // Defer while any local backend is still connecting, up to the grace period.
+  // Defer while any environment is still connecting, up to the grace period.
   const [settleGraceElapsed, setSettleGraceElapsed] = useState(false);
   useEffect(() => {
     if (!isAnySettling) {

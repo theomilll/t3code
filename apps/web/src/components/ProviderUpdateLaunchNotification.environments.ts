@@ -1,4 +1,3 @@
-import type { ConnectionCatalogEntry } from "@t3tools/client-runtime/connection";
 import type { ServerConfig } from "@t3tools/contracts";
 import { useMemo } from "react";
 
@@ -7,46 +6,16 @@ import { isDesktopLocalConnectionTarget } from "~/connection/desktopLocal";
 import {
   buildLocalEnvironmentUpdateGroups,
   deriveEnvironmentDisplayLabel,
-  type EnvironmentUpdateConnectionState,
+  environmentUpdateConnectionState,
   type LocalEnvironmentProvidersInput,
   type LocalEnvironmentUpdateGroup,
 } from "./ProviderUpdateLaunchNotification.logic";
 
 /**
- * A local environment is either the same-origin primary backend or a
- * desktop-local secondary (the parallel WSL backend), which connects over
- * loopback with a bearer token and carries a `local:<backendInstanceId>`
- * connection id. SSH, relay, and other remote targets are excluded.
- */
-function isLocalConnectionTarget(target: ConnectionCatalogEntry["target"]): boolean {
-  return target._tag === "PrimaryConnectionTarget" || isDesktopLocalConnectionTarget(target);
-}
-
-function normalizeConnectionState(phase: string | undefined): EnvironmentUpdateConnectionState {
-  switch (phase) {
-    case "connected":
-      return "ready";
-    case "connecting":
-    case "reconnecting":
-      return "connecting";
-    case "unsupported":
-    case "error":
-      return "error";
-    case "offline":
-      return "disconnected";
-    default:
-      // "available" (or anything not yet observed) — the backend has not
-      // confirmed it is serving yet, so treat it as still settling so the
-      // popover waits for it.
-      return "connecting";
-  }
-}
-
-/**
- * Reactively enumerate the enabled local environments (the primary plus any
- * desktop-local secondary such as WSL) with each one's full provider list and a
- * flag for whether any is still connecting. Drives the launch popover's gating
- * and its per-environment update triggers.
+ * Reactively enumerate every environment the client knows about (the primary,
+ * a desktop-local WSL backend, remote servers) with each one's full provider
+ * list and a flag for whether any is still connecting. Drives the launch
+ * popover's gating and its per-environment update triggers.
  */
 export function useLocalEnvironmentUpdateGroups(): {
   readonly groups: LocalEnvironmentUpdateGroup[];
@@ -59,10 +28,6 @@ export function useLocalEnvironmentUpdateGroups(): {
     const inputs: LocalEnvironmentProvidersInput[] = [];
 
     for (const environment of environments) {
-      if (!isLocalConnectionTarget(environment.entry.target)) {
-        continue;
-      }
-
       const isPrimary = environment.environmentId === primaryEnvironmentId;
       const serverConfig: ServerConfig | null = environment.serverConfig;
 
@@ -85,7 +50,10 @@ export function useLocalEnvironmentUpdateGroups(): {
         // connection phase.
         connectionState: isPrimary
           ? "ready"
-          : normalizeConnectionState(environment.connection.phase),
+          : environmentUpdateConnectionState(
+              environment.connection.phase,
+              isDesktopLocalConnectionTarget(environment.entry.target),
+            ),
         providers: serverConfig?.providers ?? [],
       });
     }

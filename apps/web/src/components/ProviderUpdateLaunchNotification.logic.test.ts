@@ -16,6 +16,7 @@ import {
   collectUpdatedProviderSnapshots,
   deriveEnvironmentDisplayLabel,
   environmentGroupsWithUpdates,
+  environmentUpdateConnectionState,
   firstFailedProviderUpdateMessage,
   firstRejectedProviderUpdateMessage,
   getProviderUpdateInitialToastView,
@@ -913,6 +914,53 @@ describe("provider update launch notification logic", () => {
           fallbackLabel: "My Device",
         }),
       ).toBe("My Device");
+    });
+
+    it("treats an available remote as disconnected but an available WSL backend as connecting", () => {
+      expect(environmentUpdateConnectionState("available", false)).toBe("disconnected");
+      expect(environmentUpdateConnectionState("available", true)).toBe("connecting");
+      expect(environmentUpdateConnectionState("reconnecting", false)).toBe("connecting");
+      expect(environmentUpdateConnectionState("connected", false)).toBe("ready");
+    });
+
+    it("offers a ready remote environment's outdated providers", () => {
+      const { groups } = buildLocalEnvironmentUpdateGroups([
+        environment({
+          environmentId: "env-mac-mini",
+          label: "Theo's Mac mini",
+          connectionState: "ready",
+          providers: [provider({ driver: driver("claudeAgent"), latestVersion: "1.1.0" })],
+        }),
+      ]);
+
+      expect(localEnvironmentUpdateNotificationKey(groups)).toBe("env-mac-mini=claudeAgent:1.1.0");
+    });
+
+    it("offers nothing for a secondary that is not connected, and only settles while connecting", () => {
+      const outdated = [provider({ driver: driver("codex"), latestVersion: "1.1.0" })];
+      const result = buildLocalEnvironmentUpdateGroups([
+        environment({ environmentId: "env-primary", isPrimary: true, providers: [] }),
+        environment({
+          environmentId: "env-offline",
+          connectionState: "disconnected",
+          providers: outdated,
+        }),
+        environment({ environmentId: "env-failed", connectionState: "error", providers: outdated }),
+      ]);
+
+      expect(result.isAnySettling).toBe(false);
+      expect(result.groups.flatMap((group) => group.candidates)).toEqual([]);
+      expect(localEnvironmentUpdateNotificationKey(result.groups)).toBeNull();
+
+      const connecting = buildLocalEnvironmentUpdateGroups([
+        environment({
+          environmentId: "env-remote",
+          connectionState: "connecting",
+          providers: outdated,
+        }),
+      ]);
+      expect(connecting.isAnySettling).toBe(true);
+      expect(connecting.groups[0]?.candidates).toEqual([]);
     });
   });
 

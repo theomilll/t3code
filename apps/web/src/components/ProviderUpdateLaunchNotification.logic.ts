@@ -7,6 +7,7 @@ import {
   type ProviderInstanceId,
   type ServerProvider,
 } from "@t3tools/contracts";
+import type { EnvironmentConnectionPhase } from "@t3tools/client-runtime/connection";
 import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
@@ -600,8 +601,8 @@ function getFailedProviderUpdateDescription(providers: ReadonlyArray<ServerProvi
 // ===========================================================================
 // Multi-environment provider updates
 //
-// With a desktop-local secondary backend present (the WSL backend alongside the
-// Windows primary), a provider update is applied across every local backend.
+// When the client knows about more than one environment (a desktop-local WSL
+// backend, or a remote server), a provider update is offered per environment.
 // Each environment owns its own provider instances, so candidates and progress
 // are computed per environment and the dispatch targets that environment's
 // connection. These helpers are pure; the dispatch itself runs through the
@@ -609,7 +610,7 @@ function getFailedProviderUpdateDescription(providers: ReadonlyArray<ServerProvi
 // ===========================================================================
 
 /**
- * The settled result of dispatching a provider update to one local backend.
+ * The settled result of dispatching a provider update to one environment.
  * `provider` is the post-update snapshot of the targeted instance returned by
  * that backend (null when the backend did not report the targeted instance,
  * e.g. it does not have it installed).
@@ -648,7 +649,7 @@ export function firstRejectedProviderUpdateMessage(
 
 /**
  * Reduce per-backend update outcomes to one representative snapshot per driver,
- * keeping the worst-case status across every local backend. Because the same
+ * keeping the worst-case status across every environment. Because the same
  * driver has a distinct instance id per environment, a secondary backend (e.g.
  * WSL) that *resolved* with a failed or unchanged provider would otherwise be
  * filtered out (its instance id is not the primary's) or collapsed behind the
@@ -701,8 +702,31 @@ export function deriveEnvironmentDisplayLabel(input: {
   }
 }
 
-/** Connection state of a local environment, normalized across primary/secondary sources. */
+/** Connection state of an environment, normalized across primary/secondary sources. */
 export type EnvironmentUpdateConnectionState = "connecting" | "ready" | "disconnected" | "error";
+
+/** Map a non-primary environment's connection phase to its update connection state. */
+export function environmentUpdateConnectionState(
+  phase: EnvironmentConnectionPhase,
+  isDesktopLocal: boolean,
+): EnvironmentUpdateConnectionState {
+  switch (phase) {
+    case "connected":
+      return "ready";
+    case "connecting":
+    case "reconnecting":
+      return "connecting";
+    case "unsupported":
+    case "error":
+      return "error";
+    case "offline":
+      return "disconnected";
+    case "available":
+      // A desktop-local backend (WSL) reports "available" while it boots. For any
+      // other environment it means the client is not trying to connect.
+      return isDesktopLocal ? "connecting" : "disconnected";
+  }
+}
 
 export interface LocalEnvironmentProvidersInput {
   readonly environmentId: EnvironmentId;
@@ -725,9 +749,11 @@ export interface LocalEnvironmentUpdateGroup {
 }
 
 /**
- * Build one update group per local environment, pairing each environment's
- * outdated one-click candidates with its own provider list, and report whether
- * any environment is still settling (so the caller can defer the popover).
+ * Build one update group per environment, pairing each environment's outdated
+ * one-click candidates with its own provider list, and report whether any
+ * environment is still settling (so the caller can defer the popover). A
+ * non-primary environment offers candidates only while connected: its cached
+ * provider list outlives a disconnect, but an update cannot reach it.
  */
 export function buildLocalEnvironmentUpdateGroups(
   environments: ReadonlyArray<LocalEnvironmentProvidersInput>,
@@ -737,9 +763,12 @@ export function buildLocalEnvironmentUpdateGroups(
     label: environment.label,
     isPrimary: environment.isPrimary,
     isSettling: environment.connectionState === "connecting",
-    candidates: collectProviderUpdateCandidates(environment.providers).filter((candidate) =>
-      canOneClickUpdateProviderCandidate(candidate, environment.providers),
-    ),
+    candidates:
+      environment.isPrimary || environment.connectionState === "ready"
+        ? collectProviderUpdateCandidates(environment.providers).filter((candidate) =>
+            canOneClickUpdateProviderCandidate(candidate, environment.providers),
+          )
+        : [],
     providers: environment.providers,
   }));
   const isAnySettling = environments.some(
